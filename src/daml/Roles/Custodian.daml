@@ -1,0 +1,189 @@
+module Roles.Custodian where
+
+import Services.Custody.Service qualified as Custody (Approve(..), Offer(..), Request, Service, Terminate(..))
+import Services.Issuance.Service qualified as Issuance (Approve(..), Offer(..), Request, Service, Terminate(..))
+import Services.Lifecycle.Service qualified as Lifecycle (Approve(..), Offer(..), Request, Service, Terminate(..))
+import Services.Settlement.Service qualified as Settlement (Approve(..), Offer(..), Request, Service, Terminate(..))
+import Services.Structuring.Service qualified as Structuring (Approve(..), Factories, Offer(..), Request, Service, Terminate(..))
+import Daml.Finance.Interface.Account.Factory qualified as AccountFactory (I)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (I)
+import Daml.Finance.Interface.Lifecycle.Rule.Claim qualified as Lifecycle (Claim)
+import Daml.Finance.Interface.Lifecycle.Rule.Lifecycle qualified as Lifecycle (I)
+import Daml.Finance.Interface.Settlement.Factory qualified as SettlementFactory (I)
+import Daml.Finance.Interface.Settlement.RouteProvider qualified as RouteProvider (I)
+
+template Role
+  with
+    operator : Party
+    provider : Party
+  where
+    signatory operator, provider
+
+    key (operator, provider) :  (Party, Party)
+    maintainer key._1
+
+    nonconsuming choice OfferCustodyService : ContractId Custody.Offer
+      with
+        customer : Party
+        claimRuleCid : ContractId Lifecycle.Claim
+        accountFactoryCid : ContractId AccountFactory.I
+        holdingFactoryCid : ContractId HoldingFactory.I
+      controller provider
+      do
+        create Custody.Offer with operator; provider; customer; claimRuleCid; accountFactoryCid; holdingFactoryCid
+
+    nonconsuming choice ApproveCustodyRequest : ContractId Custody.Service
+      with
+        custodyRequestCid : ContractId Custody.Request
+        claimRuleCid : ContractId Lifecycle.Claim
+        accountFactoryCid : ContractId AccountFactory.I
+        holdingFactoryCid : ContractId HoldingFactory.I
+      controller provider
+      do
+        exercise custodyRequestCid Custody.Approve with operator; claimRuleCid; accountFactoryCid; holdingFactoryCid
+
+    nonconsuming choice TerminateCustodyService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Custody.Service (operator, provider, customer) Custody.Terminate with actor = provider
+
+    nonconsuming choice OfferIssuanceService : ContractId Issuance.Offer
+      with
+        customer : Party
+      controller provider
+      do
+        create Issuance.Offer with ..
+
+    nonconsuming choice ApproveIssuanceRequest : ContractId Issuance.Service
+      with
+        issuanceServiceRequestCid : ContractId Issuance.Request
+      controller provider
+      do
+        exercise issuanceServiceRequestCid Issuance.Approve with ..
+
+    nonconsuming choice TerminateIssuanceService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Issuance.Service (operator, provider, customer) Issuance.Terminate with actor = provider
+
+    nonconsuming choice OfferSettlementService : ContractId Settlement.Offer
+      with
+        customer : Party
+        routeProviderCid : ContractId RouteProvider.I
+        settlementFactoryCid : ContractId SettlementFactory.I
+      controller provider
+      do
+        create Settlement.Offer with ..
+
+    nonconsuming choice ApproveSettlementRequest : ContractId Settlement.Service
+      with
+        settlementServiceRequestCid : ContractId Settlement.Request
+        routeProviderCid : ContractId RouteProvider.I
+        settlementFactoryCid : ContractId SettlementFactory.I
+      controller provider
+      do
+        exercise settlementServiceRequestCid Settlement.Approve with ..
+
+    nonconsuming choice TerminateSettlementService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Settlement.Service (operator, provider, customer) Settlement.Terminate with actor = provider
+
+    nonconsuming choice OfferStructuringService : ContractId Structuring.Offer
+      with
+        customer : Party
+        factories : Structuring.Factories
+      controller provider
+      do
+        create Structuring.Offer with ..
+
+    nonconsuming choice ApproveStructuringRequest : ContractId Structuring.Service
+      with
+        structuringServiceRequestCid : ContractId Structuring.Request
+        factories : Structuring.Factories
+      controller provider
+      do
+        exercise structuringServiceRequestCid Structuring.Approve with ..
+
+    nonconsuming choice TerminateStructuringService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Structuring.Service (operator, provider, customer) Structuring.Terminate with actor = provider
+
+    nonconsuming choice OfferLifecycleService : ContractId Lifecycle.Offer
+      with
+        customer : Party
+        replacementRuleCid : ContractId Lifecycle.I
+        genericRuleCid : ContractId Lifecycle.I
+        dynamicRuleCid : ContractId Lifecycle.I
+      controller provider
+      do
+        create Lifecycle.Offer with ..
+
+    nonconsuming choice ApproveLifecycleRequest : ContractId Lifecycle.Service
+      with
+        lifecycleServiceRequestCid : ContractId Lifecycle.Request
+        equityDistributionRuleCid : ContractId Lifecycle.I
+        assetSwapDistributionRuleCid : ContractId Lifecycle.I
+        replacementRuleCid : ContractId Lifecycle.I
+        genericRuleCid : ContractId Lifecycle.I
+        dynamicRuleCid : ContractId Lifecycle.I
+      controller provider
+      do
+        exercise lifecycleServiceRequestCid Lifecycle.Approve with ..
+
+    nonconsuming choice TerminateLifecycleService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Lifecycle.Service (operator, provider, customer) Lifecycle.Terminate with actor = provider
+
+    choice TerminateRole: ()
+      controller operator
+      do
+        return ()
+
+template Offer
+  with
+    operator : Party
+    provider : Party
+  where
+    signatory operator
+    observer provider
+
+    choice Accept : ContractId Role
+      controller provider
+      do
+        create Role with ..
+
+    choice Decline : ()
+      controller provider
+      do
+        return ()
+
+template Request
+  with
+    provider : Party
+    operator : Party
+  where
+    signatory provider
+    observer operator
+
+    choice Approve : ContractId Role
+      controller operator
+      do
+        create Role with ..
+
+    choice Reject : ()
+      controller operator
+      do
+        return ()

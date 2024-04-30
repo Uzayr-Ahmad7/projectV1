@@ -1,0 +1,67 @@
+module Services.Structuring.Model where
+
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey, PartiesMap)
+import Daml.Finance.Interface.Types.Date.Calendar (BusinessDayConventionEnum)
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum)
+import Daml.Finance.Interface.Types.Date.RollConvention (PeriodEnum)
+
+template CreateTokenRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Text
+    description : Text
+    observers : PartiesMap
+    validAsOf : Time
+  where
+    signatory operator, provider, customer
+
+template CreateAssetForIjaraSukukRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Text
+    description : Text
+    notional : Decimal
+    rentalRate : Decimal
+    issueDate : Date
+    firstRentalDate : Date
+    maturityDate : Date
+    holidayCalendarIds : [Text]
+    calendarDataProvider : Party
+    dayCountConvention : DayCountConventionEnum
+    businessDayConvention : BusinessDayConventionEnum
+    rentalPeriod : PeriodEnum
+    rentalPeriodMultiplier : Int
+    currency : InstrumentKey
+    observers : PartiesMap
+    lastEventTimestamp : Time
+  where
+    signatory operator, provider, customer
+
+template CreateIjaraSukukRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Text
+    description : Text
+    notional : Decimal
+    rentalRate : Decimal
+    issueDate : Date
+    firstRentalDate : Date
+    maturityDate : Date
+    holidayCalendarIds : [Text]
+    calendarDataProvider : Party
+    dayCountConvention : DayCountConventionEnum
+    businessDayConvention : BusinessDayConventionEnum
+    rentalPeriod : PeriodEnum
+    rentalPeriodMultiplier : Int
+    currency : InstrumentKey
+    observers : PartiesMap
+    lastEventTimestamp : Time
+    asset : InstrumentKey
+  where
+    signatory operator, provider, customer

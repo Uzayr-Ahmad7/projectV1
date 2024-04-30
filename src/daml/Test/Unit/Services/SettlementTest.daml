@@ -1,0 +1,154 @@
+module Test.Unit.Services.SettlementTest where
+
+import Daml.Finance.Settlement.Hierarchy qualified as Settlement (Hierarchy(..))
+import Daml.Finance.Settlement.Hierarchy (Hierarchy)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (Reference(..), View(..))
+import Daml.Finance.Interface.Holding.Transferable qualified as Transferable (I, Transfer(..))
+import Daml.Finance.Account.Account qualified as Account (Factory(..))
+import Daml.Finance.Holding.Factory qualified as Holding (Factory(..))
+import Daml.Finance.Interface.Holding.Holding as Holding (I)
+import ServiceAccessLayer.CustodyService
+import ServiceAccessLayer.StructuringService
+import ServiceAccessLayer.SettlementService
+import Workflow.CreateRoles
+import Workflow.CreateServices
+import Workflow.Onboarding
+import Daml.Script
+import Test.Util
+import DA.Map as M (fromList, Map)
+import DA.Set as S (fromList, singleton)
+import DA.Date (Month(..), date, toDateUTC, toGregorian)
+import DA.Time (time)
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey, AccountKey, Id(..))
+import Daml.Finance.Interface.Util.Common (qty)
+-- initialiseParties; createSettlementService; create currency & deposit in accounts
+
+main : Script ()
+main = do
+  settlementLatency
+  pure()
+
+settlementLatency : Script()
+settlementLatency = do
+  
+  SetupState{
+    operator,
+    centralBank,
+    registry,
+    custodian,
+    gbp,
+    registryHoldingCid,
+    custodianHoldingCid,
+    registryCashAccount,
+    custodianCashAccount
+  } <- setup
+
+  startTime <- getTime
+
+  (batchCid, recInstructionCid, payInstructionCid) <- createAndAcceptDvP custodian registry operator centralBank (qty 120_000_000.0 gbp) (qty 120_000_000.0 gbp) "TestDvP"
+  preSettlementTime <- getTime
+  allocateAndApprove operator custodian registry centralBank centralBank payInstructionCid recInstructionCid custodianHoldingCid registryCashAccount
+  allocateAndApprove operator registry custodian centralBank centralBank recInstructionCid payInstructionCid registryHoldingCid custodianCashAccount 
+
+  preBatchTime <- getTime
+
+  settleBatch operator centralBank custodian batchCid
+  
+  endTime <- getTime
+
+  debug $ "Transaction Start Time: " <> show startTime
+  debug $ "Settlement Start Time: " <> show preSettlementTime
+  debug $ "Pre-Batch Time: " <> show preBatchTime
+  debug $ "Settlement End Time: " <> show endTime
+
+  pure()
+
+
+transferLatency : Script()
+transferLatency = do
+  SetupState{
+    operator,
+    centralBank,
+    registry,
+    custodian,
+    public,
+    gbp,
+    registryHoldingCid,
+    custodianHoldingCid,
+    registryCashAccount,
+    custodianCashAccount
+  } <- setup
+
+  startTime <- getTime
+
+  let transferable = coerceInterfaceContractId @Transferable.I custodianHoldingCid
+  transfer custodian registryCashAccount public transferable
+
+  endTime <- getTime
+
+  debug $ "Transfer Start Time: " <> show startTime
+  debug $ "Transfer End Time: " <> show endTime
+
+  pure()
+
+setup : Script SetupState 
+setup = do
+  parties <- initialiseParties
+  let
+    all@[operator, centralBank, registry, issuer, custodian, company, investor1, investor2, investor3, public] = map (.id) parties
+    pub = M.fromList [("Public", singleton public)]
+  
+  t <- getTime
+  let
+    today = toDateUTC t
+    todayTime = time today 0 0 0
+    tt d = time d 0 0 0
+    epoch = tt $ date 1970 Jan 1
+    (ty, tm, td) = toGregorian today
+  
+  createOperatorRole operator
+
+  accountFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Account.Factory with provider = operator; observers = pub
+  holdingFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Holding.Factory with id = Id "HoldingFactory"; provider = operator; observers = pub
+  submit operator do createCmd HoldingFactory.Reference with factoryView = (HoldingFactory.View with provider = operator; id = Id "HoldingFactory"); cid = holdingFactoryCid; observers = pub
+
+  let paths = getPaths centralBank registry custodian
+
+  onBoardCentralBank operator centralBank
+  registryCashAccount <- onBoardRegistry operator registry centralBank public paths accountFactoryCid holdingFactoryCid
+  [custodianCashAccount, custodianSecAccount] <- onBoardCustodian operator custodian registry centralBank public paths accountFactoryCid holdingFactoryCid
+
+  gbp <- originateToken centralBank centralBank pub epoch "GBP" "Great British Pound"
+
+  --   deposit gbp into custody and registry accounts
+  registryHoldingCid <- deposit operator centralBank  registry  public (qty 120_000_000.0 gbp) registryCashAccount
+  custodianHoldingCid <- deposit operator centralBank  custodian public (qty 120_000_000.0 gbp) custodianCashAccount
+  
+  --   create settlement services
+  createSettlementService operator centralBank registry paths
+  createSettlementService operator centralBank custodian paths
+
+  pure SetupState with
+    operator
+    centralBank
+    registry
+    custodian
+    public
+    gbp
+    registryHoldingCid
+    custodianHoldingCid
+    registryCashAccount
+    custodianCashAccount
+
+data SetupState = SetupState
+  with
+    operator : Party
+    centralBank : Party
+    registry : Party
+    custodian : Party
+    public : Party
+    gbp : InstrumentKey
+    registryHoldingCid : ContractId Holding.I
+    custodianHoldingCid : ContractId Holding.I
+    registryCashAccount : AccountKey
+    custodianCashAccount : AccountKey

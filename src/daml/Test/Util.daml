@@ -1,0 +1,28 @@
+module Test.Util where
+
+
+import Daml.Finance.Settlement.Hierarchy qualified as Settlement (Hierarchy(..))
+import Daml.Finance.Settlement.Hierarchy (Hierarchy)
+import Util.Util
+import Daml.Script
+import DA.Map (Map, fromList)
+
+
+
+
+initialiseParties : Script([PartyInfo])
+initialiseParties = do
+  let 
+    partyNames = ["Operator", "CentralBank", "Registry", "Issuer", "Custodian", "Company", "Investor1", "Investor2", "Investor3"]
+    publicName = "Public"
+  parties <- allocateParties partyNames publicName
+
+  pure parties
+
+getPaths : Party -> Party -> Party -> Map Text Hierarchy
+getPaths centralBank registry custodian = do
+  let 
+    settlementPaths = [[registry], [custodian]]
+    cashRoute = Settlement.Hierarchy with rootCustodian = centralBank; pathsToRootCustodian = settlementPaths
+    paths = fromList $ [("GBP", cashRoute)]
+  paths

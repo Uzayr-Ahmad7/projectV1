@@ -1,0 +1,133 @@
+module Test.Unit.Services.StructuringTest where
+
+import Daml.Script
+import Util.Util
+import DA.Map (fromList)
+import DA.Set (singleton)
+import Services.Structuring.Service qualified as Structuring (CreateAssetForIjaraSukuk(..), RequestCreateAssetForIjaraSukuk(..), createCouponPeriodicSchedule, Approve(..), Factories(..), Offer(..), Request, Service, Terminate(..), Accept(..))
+import Instrument.Implementation.Sukuk.Ijara.Factory qualified as IjaraSukuk (Factory(..))
+import Instrument.Implementation.Sukuk.Asset.Factory qualified as AssetForIjaraSukuk (Factory(..))
+import Daml.Finance.Instrument.Token.Factory qualified as Token (Factory(..))
+import DA.Assert
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey, PartiesMap)
+import Daml.Finance.Interface.Types.Date.Calendar (BusinessDayConventionEnum(..))
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum(..))
+import Daml.Finance.Interface.Types.Date.RollConvention (PeriodEnum(..))
+import DA.Date (Month(..), date, toDateUTC, toGregorian)
+import DA.Time (time)
+import Daml.Finance.Interface.Types.Date.Schedule (PeriodicSchedule)
+import ServiceAccessLayer.StructuringService
+import Workflow.CreateServices
+import Workflow.CreateRoles
+
+main : Script(InstrumentKey)
+main = do
+  parties <- initialiseParties
+
+  let
+    all@[operator, centralBank, registry, issuer, custodian, company, investor1, investor2, investor3, public] = map (.id) parties
+    pub = fromList [("Public", singleton public)]
+
+  t <- getTime
+  let
+    today = toDateUTC t
+    todayTime = time today 0 0 0
+    tt d = time d 0 0 0
+    epoch = tt $ date 1970 Jan 1
+    (ty, tm, td) = toGregorian today
+  
+  let
+    id = "ID-ASSET-SUKUK-1"
+    description = "DESCRIPTION-ASSET-SUKUK-1"
+    observers = pub
+    lastEventTimestamp = (tt $ date 2020 tm td)
+    notional : Decimal = 1.0
+    issueDate = (date 2020 tm td)
+    holidayCalendarIds = ["EMPTY"]
+    calendarDataProvider = registry
+    firstRentalDate = (date 2021 tm td)
+    maturityDate = (date 2025 tm td)
+    dayCountConvention = Act365Fixed
+    businessDayConvention = Following
+    rentalRate : Decimal = 0.011
+    rentalPeriod = M
+    rentalPeriodMultiplier = 12
+  currency <- originateToken centralBank centralBank pub epoch "GBP" "Great British Pound"
+  
+  createOperatorRole operator
+  createCustodianRole operator registry
+  createStructuringService operator registry issuer
+
+  createCalendar registry "EMPTY" [] [] pub  
+--   testCreateAssetForIjaraSukuk operator registry issuer public id description observers lastEventTimestamp notional issueDate holidayCalendarIds calendarDataProvider firstRentalDate maturityDate dayCountConvention businessDayConvention rentalRate rentalPeriod rentalPeriodMultiplier currency
+  
+  pal <- originateAssetForIjaraSukuk operator registry issuer public id description observers lastEventTimestamp notional issueDate holidayCalendarIds calendarDataProvider firstRentalDate maturityDate dayCountConvention businessDayConvention rentalRate rentalPeriod rentalPeriodMultiplier currency
+
+  pure pal
+
+testCreateAssetForIjaraSukuk : Party -> Party -> Party -> Party -> Text -> Text -> PartiesMap -> Time -> Decimal -> Date -> [Text] -> Party -> Date -> Date -> DayCountConventionEnum -> BusinessDayConventionEnum -> Decimal -> PeriodEnum -> Int -> InstrumentKey -> Script ()
+testCreateAssetForIjaraSukuk operator provider customer public id description observers lastEventTimestamp notional issueDate holidayCalendarIds calendarDataProvider firstRentalDate maturityDate dayCountConvention businessDayConvention rentalRate rentalPeriod rentalPeriodMultiplier currency = do
+  createAssetForIjaraSukukRequestCid <- submit customer do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.RequestCreateAssetForIjaraSukuk with id; description; notional; rentalRate; issueDate; firstRentalDate; maturityDate; holidayCalendarIds; calendarDataProvider; dayCountConvention; businessDayConvention; rentalPeriod; rentalPeriodMultiplier; currency; observers; lastEventTimestamp
+  let cid = fetch createAssetForIjaraSukukRequestCid
+--   submitMulti [operator, provider, customer] [] do archiveCmd createAssetForIjaraSukukRequestCid
+  createAssetForIjaraSukukCid <- submitMulti [provider] [public] do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.CreateAssetForIjaraSukuk with ..
+  pure ()
+
+
+testCreateCouponPeriodicSchedule : Script(PeriodicSchedule)
+testCreateCouponPeriodicSchedule = do
+  t <- getTime
+  let
+    today = toDateUTC t
+    todayTime = time today 0 0 0
+    tt d = time d 0 0 0
+    epoch = tt $ date 1970 Jan 1
+    (ty, tm, td) = toGregorian today
+  
+  let
+    firstRentalDate = (date 2021 tm td)
+    holidayCalendarIds = ["EMPTY"]
+    businessDayConvention = Following
+    rentalPeriod = M
+    rentalPeriodMultiplier = 12
+    issueDate = (date 2020 tm td)
+    maturityDate = (date 2025 tm td)
+  
+  let
+    periodicSchedule = Structuring.createCouponPeriodicSchedule firstRentalDate holidayCalendarIds businessDayConvention rentalPeriod rentalPeriodMultiplier issueDate maturityDate
+  pure periodicSchedule
+
+testOfferAndAccept : Script ()
+testOfferAndAccept = do
+  parties <- initialiseParties
+  let
+    all@[operator, registry, issuer, public] = map (.id) parties
+    pub = fromList [("Public", singleton public)]
+
+
+-- Test Offer
+  token <- toInterfaceContractId <$> submit registry do createCmd Token.Factory with provider = registry; observers = fromList [("Default", singleton issuer)]
+  ijaraSukuk <- toInterfaceContractId <$> submit registry do createCmd IjaraSukuk.Factory with provider = registry; observers = fromList [("Default", singleton issuer)]
+  assetForIjaraSukuk <- toInterfaceContractId <$> submit registry do createCmd AssetForIjaraSukuk.Factory with provider = registry; observers = fromList [("Default", singleton issuer)]
+  let factories = Structuring.Factories with token; ijaraSukuk; assetForIjaraSukuk
+  
+  offerCid <- submitMulti [operator, registry] [] do createCmd Structuring.Offer with operator; provider=registry; customer=issuer; factories
+  offerContract <- queryContractId [operator, registry] offerCid
+  assertNotEq None offerContract
+
+-- Test Accept
+  serviceCid <- submit issuer do exerciseCmd offerCid Structuring.Accept
+  serviceContract <- queryContractId issuer serviceCid
+  let text = show serviceCid
+  assertNotEq None serviceContract
+
+
+initialiseParties : Script([PartyInfo])
+initialiseParties = do
+  let 
+    partyNames = ["Operator", "CentralBank", "Registry", "Issuer", "Custodian", "Company", "Investor1", "Investor2", "Investor3"]
+    publicName = "Public"
+  parties <- allocateParties partyNames publicName
+
+  pure parties
+  

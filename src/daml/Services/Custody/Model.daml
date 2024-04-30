@@ -1,0 +1,45 @@
+module Services.Custody.Model where
+
+import Daml.Finance.Interface.Account.Account qualified as Account (Controllers)
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Finance.Interface.Types.Common.Types (AccountKey, Id, InstrumentQuantity, PartiesMap)
+
+template OpenAccountRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Id
+    description : Text
+    controllers : Account.Controllers
+    observers : PartiesMap
+  where
+    signatory operator, provider, customer
+
+template CloseAccountRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    account : AccountKey
+  where
+    signatory operator, provider, customer
+
+template DepositRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    quantity : InstrumentQuantity
+    account : AccountKey
+  where
+    signatory operator, provider, customer
+
+template WithdrawalRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    holdingCid : ContractId Holding.I
+  where
+    signatory operator, provider, customer

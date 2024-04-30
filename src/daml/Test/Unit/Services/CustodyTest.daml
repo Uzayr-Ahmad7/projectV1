@@ -1,0 +1,106 @@
+module Test.Unit.Services.CustodyTest where
+
+import Daml.Finance.Interface.Types.Common.Types (Id(..), InstrumentKey)
+import Daml.Finance.Account.Account qualified as Account (Factory(..))
+import Daml.Finance.Holding.Factory qualified as Holding (Factory(..))
+import Daml.Finance.Interface.Holding.Holding as Holding (I)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (Reference(..), View(..))
+
+import ServiceAccessLayer.StructuringService
+import ServiceAccessLayer.CustodyService
+import Workflow.CreateRoles
+import Workflow.CreateServices
+import Workflow.Onboarding
+
+import DA.Map as M (fromList, Map, empty)
+import DA.Set as S (fromList, singleton)
+
+import DA.Date (Month(..), date, toDateUTC, toGregorian)
+import DA.Time (time)
+
+import Daml.Script
+import Test.Util
+import DA.Assert
+import Daml.Finance.Account.Account (Account)
+
+-- Test Cases:
+-- 1. Opening Account
+-- 2. Closing Account
+-- 3. Deposit
+-- 4. Withdrawal
+
+-- Setup variables: setup centralbank; create custody service with registry
+
+
+main : Script ()
+main = do
+
+  -- Initialise
+  SetupState{
+    operator,
+    centralBank,
+    registry,
+    public,
+    gbp
+  } <- setup
+
+--   checkOpenAccountExists {operator, centralBank, registry, public, gbp}
+
+  pure()
+
+
+-- Creates an account then verifies exists
+checkOpenAccountExists : SetupState -> Script ()
+checkOpenAccountExists state = do
+  account <- openAccount state.operator state.centralBank state.registry state.public "Registry@CentralBank/Cash" empty
+  
+  -- accounts <- query @Account
+
+  
+--   accountContract <- queryContractId [state.operator, state.centralBank, state.registry] accountCid
+--   assertNotEq None accountContract
+  pure()
+
+
+setup : Script SetupState
+setup = do
+  parties <- initialiseParties
+  let
+    all@[operator, centralBank, registry, issuer, custodian, company, investor1, investor2, investor3, public] = map (.id) parties
+    pub = M.fromList [("Public", singleton public)]
+  
+  t <- getTime
+  let
+    today = toDateUTC t
+    todayTime = time today 0 0 0
+    tt d = time d 0 0 0
+    epoch = tt $ date 1970 Jan 1
+    (ty, tm, td) = toGregorian today
+  
+  createOperatorRole operator
+
+  accountFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Account.Factory with provider = operator; observers = pub
+  holdingFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Holding.Factory with id = Id "HoldingFactory"; provider = operator; observers = pub
+  submit operator do createCmd HoldingFactory.Reference with factoryView = (HoldingFactory.View with provider = operator; id = Id "HoldingFactory"); cid = holdingFactoryCid; observers = pub
+
+  let paths = getPaths centralBank registry custodian
+
+  onBoardCentralBank operator centralBank
+  createCustodyService operator centralBank registry paths accountFactoryCid holdingFactoryCid
+
+  gbp <- originateToken centralBank centralBank pub epoch "GBP" "Great British Pound"
+
+  pure SetupState with
+    operator
+    centralBank
+    registry
+    public 
+    gbp
+
+data SetupState = SetupState
+  with
+    operator : Party
+    centralBank : Party
+    registry : Party
+    public : Party
+    gbp : InstrumentKey

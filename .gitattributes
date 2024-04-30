@@ -1,0 +1,2 @@
+*.daml linguist-language=Haskell
+*.bat   text eol=crlf

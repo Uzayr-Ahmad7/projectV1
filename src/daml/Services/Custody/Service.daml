@@ -1,0 +1,157 @@
+module Services.Custody.Service where
+
+import Daml.Finance.Interface.Account.Account qualified as Account (Controllers, Credit(..), Debit(..), R)
+import Daml.Finance.Interface.Account.Factory qualified as AccountFactory (I, Create(..))
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (I, holdingFactoryKey)
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Finance.Interface.Account.Util (getAccount)
+import Daml.Finance.Interface.Lifecycle.Rule.Claim qualified as Lifecycle (Claim)
+import Daml.Finance.Interface.Types.Common.Types (AccountKey(..), Id, InstrumentKey, InstrumentQuantity, PartiesMap)
+import Services.Custody.Model qualified as Custody
+import Util.Util (fetchAndArchive)
+
+template Service
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    claimRuleCid : ContractId Lifecycle.Claim
+    accountFactoryCid : ContractId AccountFactory.I
+    holdingFactoryCid : ContractId HoldingFactory.I
+  where
+    signatory operator, provider, customer
+
+    key (operator, provider, customer) : (Party, Party, Party)
+    maintainer key._1
+
+    nonconsuming choice RequestOpenAccount : ContractId Custody.OpenAccountRequest
+      with
+        id : Id
+        description : Text
+        controllers : Account.Controllers
+        observers : PartiesMap
+      controller customer
+      do
+        create Custody.OpenAccountRequest with ..
+
+    nonconsuming choice RequestCloseAccount : ContractId Custody.CloseAccountRequest
+      with
+        account : AccountKey
+      controller customer
+      do
+        create Custody.CloseAccountRequest with ..
+
+    nonconsuming choice RequestDeposit : ContractId Custody.DepositRequest
+      with
+        quantity : InstrumentQuantity
+        account : AccountKey
+      controller customer
+      do
+        create Custody.DepositRequest with ..
+
+    nonconsuming choice RequestWithdrawal : ContractId Custody.WithdrawalRequest
+      with
+        instrument : InstrumentKey
+        holdingCid : ContractId Holding.I
+      controller customer
+      do
+        create Custody.WithdrawalRequest with ..
+
+    nonconsuming choice OpenAccount : AccountKey
+      with
+        openAccountRequestCid : ContractId Custody.OpenAccountRequest
+      controller provider
+      do
+        Custody.OpenAccountRequest{id; description; controllers; observers} <- fetchAndArchive openAccountRequestCid
+        holdingFactory <- HoldingFactory.holdingFactoryKey <$> fetch holdingFactoryCid
+        let account = AccountKey with custodian = provider; owner = customer; id
+        exercise accountFactoryCid AccountFactory.Create with account; description; controllers; holdingFactory; observers
+        pure account
+
+    nonconsuming choice CloseAccount : ()
+      with
+        closeAccountRequestCid : ContractId Custody.CloseAccountRequest
+      controller provider
+      do
+        Custody.CloseAccountRequest{account} <- fetchAndArchive closeAccountRequestCid
+        (_, ref) <- fetchByKey @Account.R account
+        archive ref.cid
+
+    nonconsuming choice Deposit : ContractId Holding.I
+      with
+        depositRequestCid : ContractId Custody.DepositRequest
+      controller provider
+      do
+        Custody.DepositRequest{quantity; account} <- fetchAndArchive depositRequestCid
+        (_, ref) <- fetchByKey @Account.R account
+        exercise ref.cid Account.Credit with quantity
+
+    nonconsuming choice Withdrawal : ()
+      with
+        withdrawalRequestCid : ContractId Custody.WithdrawalRequest
+      controller provider
+      do
+        Custody.WithdrawalRequest{holdingCid} <- fetchAndArchive withdrawalRequestCid
+        holding <- fetch holdingCid
+        let account = getAccount holding
+        (_, ref) <- fetchByKey @Account.R account
+        exercise ref.cid Account.Debit with holdingCid
+
+    choice Terminate : ()
+      with
+        actor : Party
+      controller actor
+      do
+        assert $ actor == operator || actor == provider || actor == customer
+        pure ()
+
+template Offer
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    claimRuleCid : ContractId Lifecycle.Claim
+    accountFactoryCid : ContractId AccountFactory.I
+    holdingFactoryCid : ContractId HoldingFactory.I
+  where
+    signatory operator, provider
+    observer customer
+
+    choice Accept : ContractId Service
+      controller customer
+      do
+        create Service with operator; provider; customer; claimRuleCid; accountFactoryCid; holdingFactoryCid
+
+    choice Decline : ()
+      controller customer
+      do pure ()
+
+    choice Withdraw : ()
+      controller provider
+      do pure ()
+
+template Request
+  with
+    customer : Party
+    provider : Party
+  where
+    signatory customer
+    observer provider
+
+    choice Cancel : ()
+      controller customer
+      do pure ()
+
+    choice Reject : ()
+      controller provider
+      do pure ()
+
+    choice Approve : ContractId Service
+      with
+        operator : Party
+        claimRuleCid : ContractId Lifecycle.Claim
+        accountFactoryCid : ContractId AccountFactory.I
+        holdingFactoryCid : ContractId HoldingFactory.I
+      controller operator, provider
+      do
+        create Service with operator; provider; customer; claimRuleCid; accountFactoryCid; holdingFactoryCid

@@ -1,0 +1,31 @@
+module ServiceAccessLayer.LifecycleService where
+
+import Services.Lifecycle.Service as Lifecycle (LifecycleAndClaim(..), PreviewLifecycle(..), Lifecycle(..), Service)
+import ServiceAccessLayer.CustodyService as CustodyService
+import Daml.Finance.Interface.Lifecycle.Event qualified as Event (I)
+import Daml.Finance.Interface.Types.Common.Types (PartiesMap, Id(..), InstrumentKey(..))
+import Daml.Finance.Interface.Lifecycle.Rule.Lifecycle qualified as Lifecycle (I, Evolve(..))
+import Daml.Finance.Interface.Claims.Claim qualified as Claim (Claim, getClaims, GetClaims(..))
+import Daml.Finance.Interface.Lifecycle.Observable.NumericObservable qualified as NumericObservable (I)
+import Daml.Finance.Claims.Lifecycle.Rule qualified as Lifecycle (Rule(..))
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Finance.Interface.Lifecycle.Rule.Claim qualified as Lifecycle (Claim, ClaimResult)
+import Daml.Script
+import DA.Set (singleton)
+
+lifecycleInstrument : Party -> Party -> Party -> PartiesMap -> ContractId Event.I -> InstrumentKey -> Script (ContractId Lifecycle.I)
+lifecycleInstrument operator provider customer observers eventCid instrument = do
+  lifecycleCid <- toInterfaceContractId @Lifecycle.I <$> submit operator do createCmd Lifecycle.Rule with providers = singleton operator; lifecycler = customer; observers; id = Id "LC-RULE"; description = "Dynamic instrument lifecycle rule"
+  (Some instrumentCid, effectCids) <- submitMulti [provider, customer] [] do exerciseByKeyCmd @Lifecycle.Service (operator, provider, customer) Lifecycle.Lifecycle with eventCid; instrument; observableCids=[]; ruleCid=lifecycleCid
+  pure (lifecycleCid)
+
+previewLifecycle : Party -> Party -> Party -> Time -> [ContractId NumericObservable.I] -> ContractId Claim.Claim -> Script ()
+previewLifecycle operator provider customer timeToday observableCids instrumentCid = do
+  (taggedClaims, pendingClaims) <- submit customer do exerciseByKeyCmd @Lifecycle.Service (operator, provider, customer) Lifecycle.PreviewLifecycle with today=timeToday; observableCids; instrumentCid
+  pure ()
+
+lifecycleAndClaim : Party -> Party -> Party -> ContractId Event.I -> ContractId Lifecycle.I -> [ContractId NumericObservable.I] -> InstrumentKey -> Id -> [ContractId Holding.I] -> Script (Lifecycle.ClaimResult)
+lifecycleAndClaim operator provider customer eventCid ruleCid observableCids instrument batchId holdingCids = do
+  claimRuleCid <- CustodyService.getClaimRuleCid operator provider customer
+  claimResult <- submit customer do exerciseByKeyCmd @Lifecycle.Service (operator, provider, customer) Lifecycle.LifecycleAndClaim with ctrl=customer; eventCid; ruleCid; observableCids; instrument; batchId; holdingCids; claimRuleCid
+  pure claimResult

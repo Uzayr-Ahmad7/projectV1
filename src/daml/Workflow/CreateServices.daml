@@ -1,0 +1,71 @@
+module Workflow.CreateServices where
+
+import DA.Map (Map, fromList)
+import DA.Set (singleton)
+import DA.Set qualified as S (fromList)
+import Services.Custody.Service qualified as Custody (Accept(..), Service)
+import Services.Issuance.Service qualified as Issuance (Accept(..), Service)
+import Services.Lifecycle.Service qualified as Lifecycle (Accept(..), Service)
+import Services.Settlement.Service qualified as Settlement (Accept(..), Offer(..), Service)
+import Services.Lifecycle.Rule.Claim qualified as Claim (Rule(..))
+import Services.Structuring.Service qualified as Structuring (Accept(..), Factories(..), Service)
+import Roles.Custodian qualified as Custodian
+import Instrument.Implementation.Sukuk.Ijara.Factory qualified as IjaraSukuk (Factory(..))
+import Instrument.Implementation.Sukuk.Asset.Factory qualified as AssetForIjaraSukuk (Factory(..))
+import Daml.Finance.Instrument.Token.Factory qualified as Token (Factory(..))
+import Daml.Finance.Claims.Lifecycle.Rule qualified as Dynamic (Rule(..))
+import Daml.Finance.Interface.Account.Factory qualified as AccountFactory (I)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (I)
+import Daml.Finance.Interface.Types.Common.Types (Id(..))
+import Daml.Finance.Lifecycle.Rule.Replacement qualified as Replacement (Rule(..))
+import Daml.Finance.Settlement.Hierarchy qualified as Settlement (Hierarchy)
+import Daml.Finance.Settlement.RouteProvider.IntermediatedStatic qualified as RouteProvider (IntermediatedStatic(..))
+import Daml.Finance.Settlement.Factory qualified as Settlement (Factory(..))
+import Daml.Finance.Instrument.Generic.Lifecycle.Rule qualified as Generic (Rule(..))
+import Daml.Script
+
+type SettlementPaths = Map Text Settlement.Hierarchy
+
+createCustodyService : Party -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script (ContractId Custody.Service)
+createCustodyService operator provider customer paths accountFactoryCid holdingFactoryCid = do
+  let
+    providers = S.fromList [operator, provider, customer]
+    observers = S.fromList [operator, customer]
+  routeProviderCid      <- toInterfaceContractId <$> submit provider do createCmd RouteProvider.IntermediatedStatic with provider; observers; paths
+  settlementFactoryCid  <- toInterfaceContractId <$> submit provider do createCmd Settlement.Factory with provider; observers
+  claimRuleCid          <- toInterfaceContractId <$> submitMulti [provider, customer] [] do createCmd Claim.Rule with providers = S.fromList [provider, customer]; claimers = providers; settlers = providers; holdingFactoryCid; routeProviderCid; settlementFactoryCid; netInstructions = False
+  offerCid <- submit provider do exerciseByKeyCmd @Custodian.Role (operator, provider) Custodian.OfferCustodyService with customer; claimRuleCid; accountFactoryCid; holdingFactoryCid
+  submit customer do exerciseCmd offerCid Custody.Accept
+
+createIssuanceService : Party -> Party -> Party -> Script (ContractId Issuance.Service)
+createIssuanceService operator custodian customer = do
+  offerCid <- submit custodian do exerciseByKeyCmd @Custodian.Role (operator, custodian) Custodian.OfferIssuanceService with ..
+  submit customer do exerciseCmd offerCid Issuance.Accept
+
+createStructuringService : Party -> Party -> Party -> Script (ContractId Structuring.Service)
+createStructuringService operator custodian customer = do
+  token <- toInterfaceContractId <$> submit custodian do createCmd Token.Factory with provider = custodian; observers = fromList [("Default", singleton customer)]
+  ijaraSukuk <- toInterfaceContractId <$> submit custodian do createCmd IjaraSukuk.Factory with provider = custodian; observers = fromList [("Default", singleton customer)]
+  assetForIjaraSukuk <- toInterfaceContractId <$> submit custodian do createCmd AssetForIjaraSukuk.Factory with provider = custodian; observers = fromList [("Default", singleton customer)]
+  let factories = Structuring.Factories with token; ijaraSukuk; assetForIjaraSukuk
+  offerCid <- submit custodian do exerciseByKeyCmd @Custodian.Role (operator, custodian) Custodian.OfferStructuringService with ..
+  submit customer do exerciseCmd offerCid Structuring.Accept
+
+createLifecycleService : Party -> Party -> Party -> Party -> Script (ContractId Lifecycle.Service)
+createLifecycleService operator provider customer public = do
+  let
+    observers = fromList [("Public", singleton public)]
+    providers = singleton provider
+  replacementRuleCid  <- toInterfaceContractId <$> submit provider do createCmd Replacement.Rule  with providers; lifecycler = customer; id = Id "ReplacementRule"; description = ""; observers = singleton public
+  genericRuleCid      <- toInterfaceContractId <$> submit provider do createCmd Generic.Rule      with providers; lifecycler = customer; id = Id "GenericRule"; description = ""; observers
+  dynamicRuleCid      <- toInterfaceContractId <$> submit provider do createCmd Dynamic.Rule      with providers; lifecycler = customer; id = Id "DynamicRule"; description = ""; observers
+  offerCid <- submit provider do exerciseByKeyCmd @Custodian.Role (operator, provider) Custodian.OfferLifecycleService with ..
+  submit customer do exerciseCmd offerCid Lifecycle.Accept
+
+
+createSettlementService : Party -> Party -> Party -> SettlementPaths -> Script (ContractId Settlement.Service)
+createSettlementService operator provider customer paths = do
+  routeProviderCid      <- toInterfaceContractId <$> submit provider do createCmd RouteProvider.IntermediatedStatic  with provider; observers = singleton customer; paths
+  settlementFactoryCid  <- toInterfaceContractId <$> submit provider do createCmd Settlement.Factory                 with provider; observers = singleton customer
+  offerCid <- submitMulti [operator, provider] [] do createCmd Settlement.Offer with operator; provider; customer; routeProviderCid; settlementFactoryCid
+  submit customer do exerciseCmd offerCid Settlement.Accept

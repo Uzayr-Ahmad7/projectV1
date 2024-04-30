@@ -1,0 +1,29 @@
+module Instrument.Interface.Sukuk.Asset.Types where
+
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey(..))
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum)
+import Daml.Finance.Interface.Types.Date.Schedule (PeriodicSchedule(..))
+
+-- Represents the asset used to back the sukuk
+data Asset = Asset
+  with
+    instrument : InstrumentKey
+    -- ^ The instrument's key
+    description : Text
+    -- ^ The description of the asset lease
+    rentalRate : Decimal
+    -- ^ Rental rate paid to SPV
+    periodicSchedule : PeriodicSchedule
+    -- Schedule for periodic rental payments
+    holidayCalendarIds : [Text]
+    -- ^ The identifiers of the holiday calendars to be used for the coupon schedule.
+    calendarDataProvider : Party
+    -- ^ The reference data provider to use for the holiday calendar.
+    dayCountConvention : DayCountConventionEnum
+    -- ^ The day count convention used to calculate day count fractions. For example: Act360.
+    notional : Decimal
+    currency : InstrumentKey
+    -- ^ The currency of the sukuk. For example, if the sukuk pays in USD this should be a USD cash
+    lastEventTimestamp : Time
+    -- ^ (Market) time of the last recorded lifecycle event. If no event has occurred yet, the time of creation should be used
+  deriving(Eq, Show)  

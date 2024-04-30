@@ -1,0 +1,17 @@
+module ServiceAccessLayer.IssuanceService where
+
+import Daml.Finance.Interface.Types.Common.Types (AccountKey, Id(..), InstrumentQuantity)
+import Services.Issuance.Service qualified as Issuance (CreateIssuance(..), RequestCreateIssuance(..), Service)
+import Services.Issuance.Model qualified as Issuance (T)
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Script
+
+-- Issuance.Service is the contract stored on the ledger
+-- This class allows off-ledger application to post issuance request to ledger
+issue : Party -> Party -> Party -> Party -> InstrumentQuantity -> AccountKey -> Script (ContractId Issuance.T, ContractId Holding.I)
+issue operator provider customer public quantity account = do
+  let
+    id = Id $ "ISSUANCE-" <> show quantity.unit.id
+    description = "Issuance of " <> show quantity.amount <> " " <> show quantity.unit.id
+  createIssuanceRequestCid <- submit customer do exerciseByKeyCmd @Issuance.Service (operator, provider, customer) Issuance.RequestCreateIssuance with id; description; quantity; account
+  submitMulti [provider] [public] do exerciseByKeyCmd @Issuance.Service (operator, provider, customer) Issuance.CreateIssuance with ..

@@ -1,0 +1,42 @@
+module Services.Issuance.Model where
+
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Finance.Interface.Types.Common.Types (AccountKey, Id, InstrumentQuantity)
+
+type T = Issuance
+
+template Issuance
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Id
+    description : Text
+    quantity : InstrumentQuantity
+  where
+    signatory operator, provider, customer
+
+    key (operator, provider, id) : (Party, Party, Id)
+    maintainer key._1
+
+template CreateIssuanceRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Id
+    description : Text
+    quantity : InstrumentQuantity
+    account : AccountKey
+  where
+    signatory operator, provider, customer
+
+template ReduceIssuanceRequest
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    id : Id
+    holdingCid : ContractId Holding.I
+  where
+    signatory operator, provider, customer

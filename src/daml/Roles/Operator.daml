@@ -1,0 +1,98 @@
+module Roles.Operator where
+
+import Roles.Custodian qualified as Custodian (Approve(..), Offer(..), Request, Role)
+import Roles.CentralBank qualified as CentralBank (Approve(..), Offer(..), Request, Role)
+import Roles.Bank qualified as Bank (Approve(..), Offer(..), Request, Role)
+import Roles.Registry qualified as Registry (Approve(..), Offer(..), Request, Role)
+import Roles.InvestorCustodian qualified as InvestorCustodian (Approve(..), Offer(..), Request, Role)
+
+
+-- import Util.Util qualified as Util (PartyInfo, allocateParties)
+
+template Role
+  with
+    operator : Party
+  where
+    signatory operator
+
+    key operator : Party
+    maintainer key
+
+    nonconsuming choice OfferCustodianRole : ContractId Custodian.Offer
+      with
+        provider : Party
+      controller operator
+      do
+        create Custodian.Offer with ..
+
+    nonconsuming choice ApproveCustodianRequest : ContractId Custodian.Role
+      with
+        custodianRequestCid : ContractId Custodian.Request
+      controller operator
+      do
+        exercise custodianRequestCid Custodian.Approve
+    
+    nonconsuming choice OfferCentralBankRole : ContractId CentralBank.Offer
+      with
+        provider : Party
+      controller operator
+      do
+        create CentralBank.Offer with ..
+
+    nonconsuming choice ApproveCentralBankRequest : ContractId CentralBank.Role
+      with
+        centralBankRequestCid : ContractId CentralBank.Request
+      controller operator
+      do
+        exercise centralBankRequestCid CentralBank.Approve
+
+    nonconsuming choice OfferBankRole : ContractId Bank.Offer
+      with
+        provider : Party
+      controller operator
+      do
+        create Bank.Offer with ..
+
+    nonconsuming choice ApproveBankRequest : ContractId Bank.Role
+      with
+        bankRequestCid : ContractId Bank.Request
+      controller operator
+      do
+        exercise bankRequestCid Bank.Approve
+
+    nonconsuming choice OfferRegistryRole : ContractId Registry.Offer
+      with
+        provider : Party
+      controller operator
+      do
+        create Registry.Offer with ..
+
+    nonconsuming choice ApproveRegistryRequest : ContractId Registry.Role
+      with
+        registryRequestCid : ContractId Registry.Request
+      controller operator
+      do
+        exercise registryRequestCid Registry.Approve
+
+    nonconsuming choice OfferInvestorCustodianRole : ContractId InvestorCustodian.Offer
+      with
+        provider : Party
+      controller operator
+      do
+        create InvestorCustodian.Offer with ..
+
+    nonconsuming choice ApproveInvestorCustodianRequest : ContractId InvestorCustodian.Role
+      with
+        investorCustodianRequestCid : ContractId InvestorCustodian.Request
+      controller operator
+      do
+        exercise investorCustodianRequestCid InvestorCustodian.Approve
+
+
+    -- nonconsuming choice AllocateParties : ContractId [Util.PartyInfo]
+    --   with
+    --     partyNames : [Text]
+    --     publicPartyName : Text
+    --   controller operator
+    --   do
+    --     Util.allocateParties partyNames publicPartyName 

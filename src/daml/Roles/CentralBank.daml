@@ -1,0 +1,86 @@
+module Roles.CentralBank where
+
+import Daml.Finance.Interface.Account.Factory qualified as AccountFactory (I)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (I)
+import Daml.Finance.Interface.Lifecycle.Rule.Claim qualified as Lifecycle (Claim)
+import Services.Custody.Service qualified as Custody (Approve(..), Offer(..), Request, Service, Terminate(..))
+
+
+template Role
+  with
+    operator : Party
+    provider : Party
+  where
+    signatory operator, provider
+
+    key(operator, provider) : (Party, Party)
+    maintainer key._1
+
+    -- issue currency
+    nonconsuming choice OfferCustodyService : ContractId Custody.Offer
+      with
+        customer : Party
+        claimRuleCid : ContractId Lifecycle.Claim
+        accountFactoryCid : ContractId AccountFactory.I
+        holdingFactoryCid : ContractId HoldingFactory.I
+      controller provider
+      do
+        create Custody.Offer with operator; provider; customer; claimRuleCid; accountFactoryCid; holdingFactoryCid
+    
+    nonconsuming choice ApproveCustodyRequest : ContractId Custody.Service
+      with
+        custodyRequestCid : ContractId Custody.Request
+        claimRuleCid : ContractId Lifecycle.Claim
+        accountFactoryCid : ContractId AccountFactory.I
+        holdingFactoryCid : ContractId HoldingFactory.I
+      controller provider
+      do
+        exercise custodyRequestCid Custody.Approve with operator; claimRuleCid; accountFactoryCid; holdingFactoryCid
+
+    nonconsuming choice TerminateCustodyService : ()
+      with
+        customer : Party
+      controller provider
+      do
+        exerciseByKey @Custody.Service (operator, provider, customer) Custody.Terminate with actor = provider
+    
+    choice TerminateRole: ()
+      controller operator
+      do
+        return ()
+
+template Offer
+  with
+    operator : Party
+    provider : Party
+  where
+    signatory operator
+    observer provider
+
+    choice Accept : ContractId Role
+      controller provider
+      do
+        create Role with ..
+
+    choice Decline : ()
+      controller provider
+      do
+        return ()
+
+template Request
+  with
+    provider : Party
+    operator : Party
+  where
+    signatory provider
+    observer operator
+
+    choice Approve : ContractId Role
+      controller operator
+      do
+        create Role with ..
+
+    choice Reject : ()
+      controller operator
+      do
+        return ()

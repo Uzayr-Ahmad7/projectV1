@@ -1,0 +1,98 @@
+module Workflow.Onboarding where
+
+import Daml.Finance.Interface.Account.Factory qualified as AccountFactory (I)
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (I)
+import Workflow.CreateRoles
+import ServiceAccessLayer.CustodyService
+import Workflow.CreateServices
+import Daml.Script
+import Daml.Finance.Interface.Types.Common.Types (AccountKey)
+import DA.Map (empty)
+
+
+-- Onboarding process for a centralBank:
+-- Make them a custodian
+onBoardCentralBank : Party -> Party -> Script ()
+onBoardCentralBank operator centralBank = do
+  createCustodianRole operator centralBank
+  pure()
+
+
+onBoardRegistry : Party -> Party -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script (AccountKey)
+onBoardRegistry operator registry centralBank public paths accountFactoryCid holdingFactoryCid = do
+  createCustodianRole operator registry
+  createCustodyService operator centralBank registry paths accountFactoryCid holdingFactoryCid
+  let registryCashAccount = openAccount operator centralBank registry public "Registry@CentralBank/Cash" empty
+  registryCashAccount
+
+
+onBoardCustodian : Party -> Party -> Party -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script ([AccountKey])
+onBoardCustodian operator custodian registry centralBank public paths accountFactoryCid holdingFactoryCid = do
+  -- Set Role  
+  createCustodianRole operator custodian
+  
+  -- Create Services  
+  createCustodyService operator centralBank custodian paths accountFactoryCid holdingFactoryCid
+  createCustodyService operator registry custodian paths accountFactoryCid holdingFactoryCid
+  createSettlementService operator registry custodian paths
+
+  let 
+    custodianCashAccount = openAccount operator centralBank custodian public "Custodian@CentralBank/Cash" empty
+    custodianSecAccount = openAccount operator registry custodian public "Custodian@Registry/Securities" empty
+    val = sequence [custodianCashAccount, custodianSecAccount]
+  val
+
+
+onBoardIssuer : Party -> Party -> Party -> Party -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script ([AccountKey])
+onBoardIssuer operator issuer registry custodian centralBank public paths accountFactoryCid holdingFactoryCid = do
+  -- Create Services
+  createCustodyService operator centralBank issuer paths accountFactoryCid holdingFactoryCid
+  createCustodyService operator registry issuer paths accountFactoryCid holdingFactoryCid
+  createIssuanceService operator registry issuer
+  createStructuringService operator registry issuer
+  createLifecycleService operator registry issuer public
+  createSettlementService operator registry issuer paths
+
+  -- Create Accounts
+  let
+    issuerCashAccount = openAccount operator centralBank issuer public "Issuer@CentralBank/Cash" empty
+    issuerSecAccount = openAccount operator registry issuer public "Issuer@Registry/Securities" empty
+    val = sequence [issuerCashAccount, issuerSecAccount]
+  val
+
+onBoardCompany : Party -> Party -> Party -> Party -> Party -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script ([AccountKey])
+onBoardCompany operator company issuer registry custodian centralBank public paths accountFactoryCid holdingFactoryCid = do
+  -- Create Services
+  createCustodyService operator centralBank company paths accountFactoryCid holdingFactoryCid
+  createCustodyService operator registry company paths accountFactoryCid holdingFactoryCid
+  createIssuanceService operator registry company
+  createStructuringService operator registry company
+  createLifecycleService operator registry company public
+  createSettlementService operator registry company paths
+
+  -- Create Accounts
+  let
+    companyCashAccount = openAccount operator centralBank company public "Company@CentralBank/Cash" empty
+    companySecAccount = openAccount operator registry company public "Company@Registry/Securities" empty
+    val = sequence [companyCashAccount, companySecAccount]
+  val
+
+
+
+onBoardInvestor : Party -> Party -> Text -> Party -> Party -> SettlementPaths -> ContractId AccountFactory.I -> ContractId HoldingFactory.I -> Script ([AccountKey])
+onBoardInvestor operator investor investorName custodian public paths accountFactoryCid holdingFactoryCid = do
+  -- Create Services
+  createCustodyService operator custodian investor paths accountFactoryCid holdingFactoryCid
+  -- createCustodyService operator registry issuer paths accountFactoryCid holdingFactoryCid
+  createSettlementService operator custodian investor paths
+
+  -- Create Accounts
+  let
+    cashAccountName = investorName <> "@Custodian/Cash"
+    secAccountName = investorName <> "@Custodian/Securities"
+    investorCashAccount = openAccount operator custodian investor public cashAccountName empty
+    investorSecAccount = openAccount operator custodian investor public secAccountName empty
+    val = sequence [investorCashAccount, investorSecAccount]
+  val
+
+

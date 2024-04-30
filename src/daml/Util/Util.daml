@@ -1,0 +1,91 @@
+module Util.Util where
+
+import Daml.Script
+import DA.Optional (fromOptional)
+import DA.Text (asciiToLower)
+import DA.List (head, singleton)
+-- import Daml.Finance.Settlement.Hierarchy (Hierarchy)
+import DA.Map qualified as M (fromList, Map)
+import DA.Set(fromList)
+import DA.Date (DayOfWeek)
+import Daml.Finance.Settlement.Hierarchy qualified as Settlement (Hierarchy(..))
+import Daml.Finance.Interface.Types.Common.Types (Id(..), Parties)
+import Daml.Finance.Interface.Types.Date.Calendar (HolidayCalendarData(..))
+import Daml.Finance.Data.Reference.HolidayCalendar qualified as Data (HolidayCalendar(..))
+import Daml.Finance.Data.Time.DateClock qualified as Data (DateClock(..))
+import Daml.Finance.Data.Time.DateClockUpdate qualified as Data (DateClockUpdateEvent(..))
+import Daml.Finance.Interface.Lifecycle.Observable.TimeObservable qualified as TimeObservable (I)
+import Daml.Finance.Interface.Lifecycle.Event qualified as Event (I)
+import Daml.Finance.Data.Time.DateClock.Types (Unit(..))
+import DA.Time (time)
+
+
+data PartyInfo = PartyInfo
+  with
+    name : Text
+    id : Party
+  deriving (Eq, Show)
+
+-- | Fetches a contract, archives it and returns its value.
+fetchAndArchive : (HasArchive a, HasFetch a) => ContractId a -> Update a
+fetchAndArchive cid = do
+  c <- fetch cid
+  archive cid
+  return c
+
+allocateUser : Text -> [Party] -> [Party] -> Script User
+allocateUser displayName actAsParties readAsParties = do
+  userId <- validateUserId $ asciiToLower displayName
+  let
+    user = User userId (Some $ head actAsParties)
+    actAsRights = fmap CanActAs actAsParties
+    readAsRights = fmap CanReadAs readAsParties
+  createUser user $ actAsRights ++ readAsRights
+  pure user
+
+allocateParties : [Text] -> Text -> Script [PartyInfo]
+allocateParties partyNames publicPartyName = do
+  existingParties <- listKnownParties
+  let
+    scopedPartyName p = p 
+    allocate publicParty party =
+      case find (\d -> (fromOptional "" d.displayName) == party) existingParties of
+        Some detail -> do pure detail.party
+        None -> do
+          let
+            scopedPartyName = party
+            scopedUserName = scopedPartyName
+          p <- allocatePartyWithHint scopedPartyName $ PartyIdHint scopedPartyName
+          u <- allocateUser scopedUserName [p] [publicParty]
+          pure p
+  publicParty <- allocatePartyWithHint (scopedPartyName publicPartyName) $ PartyIdHint (scopedPartyName publicPartyName)
+  parties <- mapA (allocate publicParty) partyNames
+  pure $ map (\(name, id) -> PartyInfo with name; id) $ zip partyNames parties ++ singleton (publicPartyName, publicParty)
+
+getSettlementPaths : Party -> Party -> Party -> Party -> Party -> [Party] -> [Text] -> M.Map Text Settlement.Hierarchy
+getSettlementPaths centralBank registry custodian issuer company investors assets = do
+  let
+    investorCustodianPairs = map (\investor -> [investor, custodian]) investors
+    cashSettlementPaths = [[issuer], [custodian], [company], [registry]] ++ investorCustodianPairs
+    secSettlementPaths = [[issuer], [custodian], [company]] ++ investorCustodianPairs
+    cashRoute = Settlement.Hierarchy with rootCustodian = centralBank; pathsToRootCustodian = cashSettlementPaths
+    secRoute = Settlement.Hierarchy with rootCustodian = registry; pathsToRootCustodian = secSettlementPaths
+    paths = M.fromList $ ("GBP", cashRoute) :: map (\a -> (a, secRoute)) assets
+  paths
+
+createCalendar : Party -> Text -> [DayOfWeek] -> [Date] -> M.Map Text Parties -> Script (ContractId Data.HolidayCalendar)
+createCalendar provider id weekend holidays observers = do
+  let
+    calendar = HolidayCalendarData with id; weekend; holidays
+  submit provider do createCmd Data.HolidayCalendar with provider; calendar; observers
+
+createClockAndEvent : [Party] -> Date -> Parties -> Script (ContractId TimeObservable.I, ContractId Event.I)
+createClockAndEvent providers today observers = do
+  let
+    description = show today
+    id = Id description
+    date = Unit today
+    clock = Data.DateClock with providers = fromList providers; date; id; description; observers
+  clockCid <- toInterfaceContractId <$> submitMulti providers [] do createCmd clock
+  eventCid <- toInterfaceContractId <$> submitMulti providers [] do createCmd Data.DateClockUpdateEvent with providers = fromList providers; id; description; eventTime = time today 0 0 0; date = today; observers
+  pure (clockCid, eventCid)

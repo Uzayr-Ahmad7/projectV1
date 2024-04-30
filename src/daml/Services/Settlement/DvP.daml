@@ -1,0 +1,48 @@
+module Services.Settlement.DvP where
+
+import Daml.Finance.Interface.Settlement.Types (Step(..))
+import Daml.Finance.Interface.Types.Common.Types (Id(..), InstrumentQuantity)
+import Daml.Finance.Interface.Settlement.Batch qualified as Batch (I)
+import Daml.Finance.Interface.Settlement.Instruction qualified as Instruction (I)
+import Services.Settlement.Service as Settlement (Service, DiscoverAndInstruct(..))
+import DA.Set (singleton, fromList)
+
+
+template Proposal
+  with
+    receivingQuantity : InstrumentQuantity
+    payingQuantity : InstrumentQuantity
+    proposer : Party
+    counterParty : Party
+    id : Text
+  where
+    signatory proposer
+    observer counterParty
+
+    choice Accept : (ContractId Batch.I, ContractId Instruction.I, ContractId Instruction.I)
+      with
+        operator : Party
+        settlementProvider : Party
+      controller counterParty
+      do
+        let
+          receivingStep = Step with sender=counterParty; receiver=proposer; quantity=receivingQuantity
+          payingStep = Step with sender=proposer; receiver=counterParty; quantity=payingQuantity    
+
+          instructors = fromList [proposer, counterParty]
+          settlers = singleton proposer
+          id = Id "id"
+          description = "Settlement for " <> show id
+          contextId = None
+          settlementTime = None
+
+        (batchCid, [recInstructionCid, payInstructionCid]) <- exerciseByKey @Settlement.Service (operator, settlementProvider, counterParty) Settlement.DiscoverAndInstruct with actor=counterParty; settlers; id; description; contextId; settlementTime; steps=[receivingStep, payingStep]
+        pure (batchCid, recInstructionCid, payInstructionCid) 
+
+    choice Decline : ()
+      controller counterParty
+      do pure ()
+    
+    choice Withdraw : ()
+      controller proposer
+      do pure ()

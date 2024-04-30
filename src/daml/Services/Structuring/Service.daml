@@ -1,0 +1,208 @@
+module Services.Structuring.Service where
+
+import Prelude as Debug
+import DA.Date (toGregorian)
+import Services.Structuring.Model
+import Util.Util (fetchAndArchive)
+import Daml.Finance.Interface.Instrument.Base.Instrument qualified as Instrument (I)
+import Instrument.Interface.Sukuk.Ijara.Factory qualified as IjaraSukuk (Factory, Create(..))
+import Instrument.Interface.Sukuk.Ijara.Types (Ijara(..))
+import Instrument.Interface.Sukuk.Asset.Factory qualified as AssetForIjaraSukuk (Factory, Create(..))
+import Instrument.Interface.Sukuk.Asset.Types (Asset(..))
+import Daml.Finance.Interface.Types.Date.Calendar (BusinessDayAdjustment(..), BusinessDayConventionEnum)
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum)
+import Daml.Finance.Interface.Types.Date.RollConvention (Period(..), PeriodEnum, RollConventionEnum(..))
+import Daml.Finance.Interface.Types.Date.Schedule (Frequency(..), ScheduleFrequency(..), PeriodicSchedule(..))
+import Daml.Finance.Interface.Types.Common.Types (HoldingStandard(..), Id(..), InstrumentKey(..), PartiesMap)
+import Daml.Finance.Interface.Instrument.Token.Factory qualified as Token (Factory, Create(..))
+import Daml.Finance.Interface.Instrument.Token.Types (Token(..))
+
+
+data Factories = Factories
+  with
+    token : ContractId Token.Factory
+    ijaraSukuk: ContractId IjaraSukuk.Factory
+    assetForIjaraSukuk: ContractId AssetForIjaraSukuk.Factory
+  deriving (Eq, Show)
+
+template Service
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    factories : Factories
+  where
+    signatory operator, provider, customer
+
+    key (operator, provider, customer) : (Party, Party, Party)
+    maintainer key._1
+
+    nonconsuming choice RequestCreateToken : ContractId CreateTokenRequest
+      with
+        id : Text
+        description : Text
+        validAsOf : Time
+        observers : PartiesMap
+      controller customer
+      do
+        create CreateTokenRequest with ..
+    
+    nonconsuming choice RequestCreateAssetForIjaraSukuk : ContractId CreateAssetForIjaraSukukRequest
+      with
+        id : Text
+        description : Text
+        notional : Decimal
+        rentalRate : Decimal
+        issueDate : Date
+        firstRentalDate : Date
+        maturityDate : Date
+        holidayCalendarIds : [Text]
+        calendarDataProvider : Party
+        dayCountConvention : DayCountConventionEnum
+        businessDayConvention : BusinessDayConventionEnum
+        rentalPeriod : PeriodEnum
+        rentalPeriodMultiplier : Int
+        currency : InstrumentKey
+        observers : PartiesMap
+        lastEventTimestamp : Time
+      controller customer
+      do
+        create CreateAssetForIjaraSukukRequest with .. 
+
+    nonconsuming choice RequestCreateIjaraSukuk : ContractId CreateIjaraSukukRequest
+      with
+        id : Text
+        description : Text
+        notional : Decimal
+        rentalRate : Decimal
+        issueDate : Date
+        firstRentalDate : Date
+        maturityDate : Date
+        holidayCalendarIds : [Text]
+        calendarDataProvider : Party
+        dayCountConvention : DayCountConventionEnum
+        businessDayConvention : BusinessDayConventionEnum
+        rentalPeriod : PeriodEnum
+        rentalPeriodMultiplier : Int
+        currency : InstrumentKey
+        observers : PartiesMap
+        lastEventTimestamp : Time
+        asset : InstrumentKey
+      controller customer
+      do
+        create CreateIjaraSukukRequest with ..  
+
+    nonconsuming choice CreateToken : ContractId Instrument.I
+      with
+        createTokenRequestCid : ContractId CreateTokenRequest
+      controller provider
+      do
+        CreateTokenRequest{..} <- fetchAndArchive createTokenRequestCid
+        let
+          instrument = InstrumentKey with depository = provider; issuer = customer; id = Id id; version = "0"; holdingStandard = TransferableFungible
+          token = Token with ..
+        toInterfaceContractId <$> exercise factories.token Token.Create with token; observers
+
+
+    nonconsuming choice CreateAssetForIjaraSukuk : ContractId Instrument.I
+      with
+        createAssetForIjaraSukukRequestCid : ContractId CreateAssetForIjaraSukukRequest
+      controller provider
+      do
+        CreateAssetForIjaraSukukRequest{..} <- fetchAndArchive createAssetForIjaraSukukRequestCid
+        let
+          instrument = InstrumentKey with depository = provider; issuer = customer; id = Id id; version = "0"; holdingStandard = TransferableFungible
+          periodicSchedule = createCouponPeriodicSchedule firstRentalDate holidayCalendarIds businessDayConvention rentalPeriod rentalPeriodMultiplier issueDate maturityDate
+          asset = Asset with ..
+        toInterfaceContractId <$> exercise factories.assetForIjaraSukuk AssetForIjaraSukuk.Create with asset; observers
+
+    nonconsuming choice CreateIjaraSukuk : ContractId Instrument.I
+      with
+        createIjaraSukukRequestCid : ContractId CreateIjaraSukukRequest
+      controller provider
+      do
+        CreateIjaraSukukRequest{..} <- fetchAndArchive createIjaraSukukRequestCid
+        let
+          instrument = InstrumentKey with depository = provider; issuer = customer; id = Id id; version = "0"; holdingStandard = TransferableFungible
+          periodicSchedule = createCouponPeriodicSchedule firstRentalDate holidayCalendarIds businessDayConvention rentalPeriod rentalPeriodMultiplier issueDate maturityDate
+          ijara = Ijara with ..
+        toInterfaceContractId <$> exercise factories.ijaraSukuk IjaraSukuk.Create with ijara; observers
+
+
+    choice Terminate : ()
+      with
+        actor : Party
+      controller actor
+      do
+        assert $ actor == operator || actor == provider || actor == customer
+        pure ()
+
+template Offer
+  with
+    operator : Party
+    provider : Party
+    customer : Party
+    factories : Factories
+  where
+    signatory operator, provider
+    observer customer
+
+    choice Accept : ContractId Service
+      controller customer
+      do
+        create Service with ..
+
+    choice Decline : ()
+      controller customer
+      do pure ()
+
+    choice Withdraw : ()
+      controller provider
+      do pure ()
+
+template Request
+  with
+    customer : Party
+    provider : Party
+  where
+    signatory customer
+    observer provider
+
+    choice Cancel : ()
+      controller customer
+      do pure ()
+
+    choice Reject : ()
+      controller provider
+      do pure ()
+
+    choice Approve : ContractId Service
+      with
+        operator : Party
+        factories : Factories
+      controller operator, provider
+      do
+        create Service with ..
+
+-- | Create a schedule for the periodic coupon payments.
+createCouponPeriodicSchedule : Date -> [Text] -> BusinessDayConventionEnum -> PeriodEnum -> Int -> Date -> Date -> PeriodicSchedule
+createCouponPeriodicSchedule firstCouponDate holidayCalendarIds businessDayConvention couponPeriod couponPeriodMultiplier issueDate maturityDate = do
+  let
+    (y, m, d) = toGregorian firstCouponDate
+    periodicSchedule = PeriodicSchedule with
+      businessDayAdjustment =
+        BusinessDayAdjustment with
+          calendarIds = holidayCalendarIds
+          convention = businessDayConvention
+      effectiveDateBusinessDayAdjustment = None
+      terminationDateBusinessDayAdjustment = None
+      frequency =
+        Periodic $ Frequency with
+          rollConvention = DOM d
+          period = Period with period = couponPeriod; periodMultiplier = couponPeriodMultiplier
+      effectiveDate = issueDate
+      firstRegularPeriodStartDate = Some firstCouponDate
+      lastRegularPeriodEndDate = Some maturityDate
+      stubPeriodType = None
+      terminationDate = maturityDate
+  periodicSchedule

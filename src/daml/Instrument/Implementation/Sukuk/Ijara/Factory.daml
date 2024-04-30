@@ -1,0 +1,63 @@
+module Instrument.Implementation.Sukuk.Ijara.Factory where
+
+import DA.Set (singleton)
+import Daml.Finance.Interface.Claims.Claim qualified as Claim (GetClaims(..), I, getClaims)
+import Daml.Finance.Interface.Instrument.Base.Instrument qualified as BaseInstrument (createReference)
+import Daml.Finance.Interface.Types.Common.Types (PartiesMap)
+import Daml.Finance.Interface.Util.Disclosure qualified as Disclosure (I, View(..), flattenObservers)
+import Daml.Finance.Util.Disclosure (addObserversImpl, removeObserversImpl, setObserversImpl)
+
+import Instrument.Interface.Sukuk.Ijara.Factory qualified as IjaraSukukFactory (Create(..), I, View(..))
+import Instrument.Interface.Sukuk.Ijara.Types (Ijara(..))
+import Instrument.Implementation.Sukuk.Ijara.Instrument qualified as IjaraSukuk (Instrument(..))
+
+
+-- | Factory template for instrument creation.
+template Factory
+  with
+    provider : Party
+      -- ^ The factory's provider.
+    observers : PartiesMap
+      -- ^ The factory's observers.
+  where
+    signatory provider
+    observer Disclosure.flattenObservers observers
+
+    interface instance IjaraSukukFactory.I for Factory where
+      view = IjaraSukukFactory.View with provider
+      create' IjaraSukukFactory.Create{
+        ijara = Ijara{instrument; description; rentalRate;
+          periodicSchedule; holidayCalendarIds; calendarDataProvider; dayCountConvention; currency;
+          notional; lastEventTimestamp; asset};
+        observers} = do
+          let
+            ijaraSukukInstrument = IjaraSukuk.Instrument with
+              depository = instrument.depository
+              issuer = instrument.issuer
+              id = instrument.id
+              version = instrument.version
+              holdingStandard = instrument.holdingStandard
+              description
+              rentalRate
+              periodicSchedule
+              holidayCalendarIds
+              calendarDataProvider
+              dayCountConvention
+              currency
+              notional
+              lastEventTimestamp
+              asset
+              observers
+          cid <- toInterfaceContractId <$> create ijaraSukukInstrument
+          BaseInstrument.createReference instrument.depository $ toInterfaceContractId cid
+          -- Get the claims in order to run the associated checks (e.g. verify that the schedules
+          -- are valid).
+          Claim.getClaims (toInterface @Claim.I ijaraSukukInstrument) $
+            Claim.GetClaims with actor = instrument.issuer
+          pure cid
+
+    interface instance Disclosure.I for Factory where
+      view = Disclosure.View with disclosureControllers = singleton provider; observers
+      setObservers = setObserversImpl @Factory @Disclosure.I this None
+      addObservers = addObserversImpl @Factory @Disclosure.I this None
+      removeObservers = removeObserversImpl @Factory @Disclosure.I this None

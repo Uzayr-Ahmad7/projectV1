@@ -1,0 +1,56 @@
+module Test.Stress where
+
+-- import Instrument.Interface.Sukuk.Asset.Factory qualified as AssetForIjaraSukuk (Factory, Create(..))
+-- import Instrument.Implementation.Sukuk.Asset.Instrument qualified as AssetForIjaraSukuk
+-- import Roles.Operator
+-- import Daml.Script
+
+-- stressTest : Script ()
+-- stressTest = do
+--   parties <- initialiseParties
+--   all@[centralBank, registry, issuer, custodian, company, investor1, investor2, investor3, public] <- map (.id) parties
+--   pub <- fromList [("Public", singleton public)]
+
+-- --   onBoardCentralBank operator centralBank
+-- --   onBoardRegistry operator registry centralBank public paths accountFactoryCid holdingFactoryCid
+-- --   onBoardCustodian operator custodian registry centralBank public paths accountFactoryCid holdingFactoryCid
+
+--   t <- getTime
+--   let
+--     today = toDateUTC t
+--     todayTime = time today 0 0 0
+--     tt d = time d 0 0 0
+--     epoch = tt $ date 1970 Jan 1
+--     (ty, tm, td) = toGregorian today
+--   (timeObservableCid, eventCid) <- createClockAndEvent all (date 2021 tm td) (singleton public)
+
+
+--   assetForIjaraSukukFactory <- toInterfaceContractId <$> submit custodian do createCmd AssetForIjaraSukuk.Factory with provider = custodian; observers = fromList [("Default", singleton customer)]
+
+
+--   gbp <- originateToken centralBank centralBank pub epoch "GBP" "Great British Pound"
+--   let 
+--     input = "ASSETS-SUKUK001" "Asset for Ijara Sukuk001" pub (tt $ date 2020 tm td) 1.0 (date 2020 tm td) ["EMPTY"] registry (date 2021 tm td) (date 2025 tm td) Act365Fixed Following 0.011 M 12 gbp
+--   mapA_ (\party -> submit party do exercise assetForIjaraSukuk AssetForIjaraSukuk.Create with registry; party; input) [centralBank, registry, issuer, custodian, company, investor1, investor2, investor3]
+  
+--   submit "verifier" do
+--     let contracts = fetchContracts @AssetForIjaraSukuk
+--     assertMsg "Stress test passed" (lengthOf contracts == 8)
+
+--   pure()
+
+-- initialiseParties : Script [PartyInfo]
+-- initialiseParties = do
+
+-- -- Create Operator Party
+--   operator <- createOperatorParty "Operator"  
+  
+-- -- Make party an operator
+--   createOperatorRole operator
+
+-- -- Create Parties
+--   let 
+--     partyNames = ["CentralBank", "Registry", "Issuer", "Custodian", "Company", "Investor1", "Investor2", "Investor3"]
+--     publicName = "Public"
+--   parties <- allocateParties with partyNames publicName
+--   pure (parties)

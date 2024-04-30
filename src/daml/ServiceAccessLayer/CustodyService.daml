@@ -1,0 +1,42 @@
+module ServiceAccessLayer.CustodyService where
+
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey, Id(..), PartiesMap, AccountKey, InstrumentQuantity)
+import Services.Custody.Service qualified as Custody (RequestDeposit(..), Deposit(..), RequestOpenAccount(..), OpenAccount(..), Service, RequestCloseAccount(..), CloseAccount(..), RequestWithdrawal(..), Withdrawal(..))
+import Daml.Finance.Interface.Holding.Holding qualified as Holding (I)
+import Daml.Finance.Interface.Account.Account qualified as Account (Controllers(..))
+import Daml.Finance.Interface.Lifecycle.Rule.Claim qualified as Lifecycle (Claim)
+import Daml.Finance.Interface.Holding.Transferable qualified as Transferable (I, Transfer(..))
+import DA.Set (fromList, singleton)
+import Daml.Script
+
+deposit : Party -> Party -> Party -> Party -> InstrumentQuantity -> AccountKey -> Script (ContractId Holding.I)
+deposit operator provider customer public quantity account = do
+  depositRequestCid <- submit customer do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.RequestDeposit with quantity; account
+  submitMulti [provider] [public] do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.Deposit with depositRequestCid
+
+withdraw : Party -> Party -> Party -> Party -> InstrumentKey -> ContractId Holding.I -> Script ()
+withdraw operator provider customer public instrument holdingCid = do
+  withdrawalRequestCid <- submit customer do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.RequestWithdrawal with instrument; holdingCid
+  submitMulti [provider] [public] do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.Withdrawal with withdrawalRequestCid
+
+openAccount : Party -> Party -> Party -> Party -> Text -> PartiesMap -> Script AccountKey
+openAccount operator provider customer public id observers = do
+  let controllers = Account.Controllers with outgoing = singleton customer; incoming = singleton customer
+  openAccountRequestCid <- submit customer do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.RequestOpenAccount with id = Id id; description=id; controllers; observers
+  submitMulti [provider] [public] do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.OpenAccount with openAccountRequestCid
+
+closeAccount : Party -> Party -> Party -> Party -> AccountKey -> Script ()
+closeAccount operator provider customer public account = do
+  let controllers = Account.Controllers with outgoing = singleton customer; incoming = singleton customer
+  closeAccountRequestCid <- submit customer do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.RequestCloseAccount with account
+  submitMulti [provider] [public] do exerciseByKeyCmd @Custody.Service (operator, provider, customer) Custody.CloseAccount with closeAccountRequestCid
+
+transfer : Party -> AccountKey -> Party -> ContractId Transferable.I -> Script (ContractId Transferable.I)
+transfer from toAccount public depositCid = do
+  submitMulti [from, toAccount.owner] [public] do exerciseCmd depositCid Transferable.Transfer with actors = fromList [from, toAccount.owner]; newOwnerAccount = toAccount
+
+getClaimRuleCid : Party -> Party -> Party -> Script(ContractId Lifecycle.Claim)
+getClaimRuleCid operator provider customer = do
+  Some (fetchedCid, fetchedContract) <- queryContractKey @Custody.Service customer (operator, provider, customer)
+  pure(fetchedContract.claimRuleCid)
+

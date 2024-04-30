@@ -1,0 +1,123 @@
+module Test.E2E where
+
+import Services.Custody.Service as Custody (Service)
+import ServiceAccessLayer.StructuringService
+import ServiceAccessLayer.LifecycleService
+import ServiceAccessLayer.IssuanceService
+import ServiceAccessLayer.CustodyService
+import ServiceAccessLayer.SettlementService
+import Workflow.CreateRoles 
+import Workflow.Onboarding
+import Util.Util
+import Daml.Finance.Interface.Holding.Factory qualified as HoldingFactory (Reference(..), View(..))
+import Daml.Finance.Account.Account qualified as Account (Factory(..))
+import Daml.Finance.Holding.Factory qualified as Holding (Factory(..))
+import Daml.Finance.Interface.Types.Common.Types (Id(..))
+import Daml.Finance.Interface.Types.Date.Calendar (BusinessDayConventionEnum(..))
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum(..))
+import Daml.Finance.Interface.Types.Date.RollConvention (PeriodEnum(..))
+import Daml.Finance.Data.Time.DateClock qualified as Data (DateClock)
+import Daml.Finance.Data.Time.DateClockUpdate qualified as Data (DateClockUpdateEvent)
+import Daml.Finance.Interface.Util.Common (qty)
+import DA.Map (fromList)
+import DA.Set (singleton)
+import DA.Date (Month(..), date, toDateUTC, toGregorian)
+import DA.Time (time)
+import Daml.Script
+
+run : Script ()
+run = do
+-- Create Operator Party
+  operator <- createOperatorParty "Operator"  
+  
+-- Make party an operator
+  createOperatorRole operator
+
+-- Create Parties
+  let 
+    partyNames = ["CentralBank", "Registry", "Issuer", "Custodian", "Company", "Investor1", "Investor2", "Investor3"]
+    publicName = "Public"
+  parties <- allocateParties partyNames publicName
+
+  let
+    all@[centralBank, registry, issuer, custodian, company, investor1, investor2, investor3, public] = map (.id) parties
+    pub = fromList [("Public", singleton public)]
+  
+-- Define assets and settlement paths
+  let
+    assets = ["SUKUK001", "ASSETS-SUKUK001"] 
+    paths = getSettlementPaths centralBank registry custodian issuer company [investor1, investor2, investor3] assets
+  
+-- Create Factories to instantiate accounts & holdings
+  accountFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Account.Factory with provider = operator; observers = pub
+  holdingFactoryCid  <- toInterfaceContractId <$> submit operator do createCmd Holding.Factory with id = Id "HoldingFactory"; provider = operator; observers = pub
+  submit operator do createCmd HoldingFactory.Reference with factoryView = (HoldingFactory.View with provider = operator; id = Id "HoldingFactory"); cid = holdingFactoryCid; observers = pub
+
+-- Onboard Participants
+  onBoardCentralBank operator centralBank
+  registryCashAccount <- onBoardRegistry operator registry centralBank public paths accountFactoryCid holdingFactoryCid
+  [custodianCashAccount, custodianSecAccount] <- onBoardCustodian operator custodian registry centralBank public paths accountFactoryCid holdingFactoryCid
+  [issuerCashAccount, issuerSecAccount] <- onBoardIssuer operator issuer registry custodian centralBank public paths accountFactoryCid holdingFactoryCid
+  [companyCashAccount, companySecAccount] <- onBoardCompany operator company issuer registry custodian centralBank public paths accountFactoryCid holdingFactoryCid
+  [investorOneCashAccount, investorOneSecAccount] <- onBoardInvestor operator investor1 "investorNameOne" custodian public paths accountFactoryCid holdingFactoryCid
+  [investorTwoCashAccount, investorTwoSecAccount] <- onBoardInvestor operator investor2 "investorNameTwo" custodian public paths accountFactoryCid holdingFactoryCid
+  [investorThreeCashAccount, investorThreeSecAccount] <- onBoardInvestor operator investor3 "investorNameThree" custodian public paths accountFactoryCid holdingFactoryCid
+
+  -- Time
+  t <- getTime
+  let
+    today = toDateUTC t
+    todayTime = time today 0 0 0
+    tt d = time d 0 0 0
+    epoch = tt $ date 1970 Jan 1
+    (ty, tm, td) = toGregorian today
+  (timeObservableCid, eventCid) <- createClockAndEvent all (date 2021 tm td) (singleton public)
+
+  debug $ "STAGE 1 WORKING!!!"
+
+  createCalendar registry "EMPTY" [] [] pub
+
+-- Originate Instruments
+  gbp    <- originateToken centralBank centralBank pub epoch "GBP" "Great British Pound"
+  debug $ "STAGE 2 WORKING!!!"
+  assetForSukuk001 <- originateAssetForIjaraSukuk operator registry company public "ASSETS-SUKUK001" "Asset for Ijara Sukuk001" pub (tt $ date 2020 tm td) 1.0 (date 2020 tm td) ["EMPTY"] registry (date 2021 tm td) (date 2025 tm td) Act365Fixed Following 0.011 M 12 gbp
+  debug $ "STAGE 3 WORKING!!!"
+  sukuk001 <- originateIjaraSukuk operator registry issuer public "SUKUK001" "Ijara Sukuk 5Y @ 1.1%" pub (tt $ date 2020 tm td) 1.0 (date 2020 tm td) ["EMPTY"] registry (date 2021 tm td) (date 2025 tm td) Act365Fixed Following 0.011 M 12 gbp assetForSukuk001
+  let securities = [assetForSukuk001, sukuk001]
+  
+  let 
+    observableCids = [] 
+  assetRuleCid <- lifecycleInstrument operator registry company pub eventCid assetForSukuk001
+  ijaraRuleCid <- lifecycleInstrument operator registry issuer pub eventCid sukuk001
+
+  (_, assetForSukuk001HoldingCid) <- issue operator registry company public (qty 100_000_000.0 assetForSukuk001) companySecAccount
+  (_, sukuk001HoldingCid) <- issue operator registry issuer public (qty 100_000_000.0 sukuk001) issuerSecAccount
+
+
+  submitMulti all [] do archiveCmd $ fromInterfaceContractId @Data.DateClock timeObservableCid
+  submitMulti all [] do archiveCmd $ fromInterfaceContractId @Data.DateClockUpdateEvent eventCid
+
+  custodianHoldingCid <- deposit operator centralBank custodian public (qty 100_000_000.0 gbp) custodianCashAccount
+  -- issuerCashHoldingCid <- deposit operator centralBank issuer public (qty 100_000_000.0 gbp) issuerCashAccount
+
+--  Issue sukuk to investors
+  (batchCid, recInstructionCid, payInstructionCid) <- createAndAcceptDvP issuer custodian operator registry (qty 100_000_000.0 gbp) (qty 100_000_000.0 sukuk001) "Sukuk001-Subscription"
+  allocateAndApprove operator issuer custodian registry registry payInstructionCid recInstructionCid sukuk001HoldingCid custodianSecAccount
+  allocateAndApprove operator custodian issuer registry registry recInstructionCid payInstructionCid custodianHoldingCid issuerCashAccount
+  (issuerCashHoldingCid, custodianSukukHoldingCid) <- settleBatch operator registry issuer batchCid
+
+-- Purchase Asset from Company
+  (batchCid, recInstructionCid, payInstructionCid) <- createAndAcceptDvP company issuer operator registry (qty 100_000_000.0 gbp) (qty 100_000_000.0 assetForSukuk001) "AssetForSukuk001-Purchase-Undertaking"
+  allocateAndApprove operator company issuer registry registry payInstructionCid recInstructionCid assetForSukuk001HoldingCid issuerSecAccount
+  allocateAndApprove operator issuer company registry registry recInstructionCid payInstructionCid issuerCashHoldingCid companyCashAccount
+  (issuerCashHoldingCid, custodianSukukHoldingCid) <- settleBatch operator registry company batchCid
+
+  -- transfer issuer custodianSecAccount public $ coerceContractId sukuk1HoldingCid
+  -- transfer issuer custodianSecAccount public $ coerceContractId sukuk2HoldingCid
+
+
+  (timeObservableCid, eventCid) <- createClockAndEvent all today (singleton public)
+  -- lifecycleAndClaim operator provider customer eventCid ruleCid observableCids instrument batchId holdingCids claimRuleCid
+  
+
+  pure ()

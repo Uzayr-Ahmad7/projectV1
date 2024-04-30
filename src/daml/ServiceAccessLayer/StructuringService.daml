@@ -1,0 +1,47 @@
+module ServiceAccessLayer.StructuringService where
+
+import Daml.Finance.Interface.Types.Common.Types (HoldingStandard(..), Id(..), InstrumentKey, PartiesMap)
+import Daml.Finance.Interface.Types.Date.Calendar (BusinessDayConventionEnum)
+import Daml.Finance.Interface.Types.Date.DayCount (DayCountConventionEnum)
+import Daml.Finance.Interface.Types.Date.RollConvention (PeriodEnum)
+import Services.Structuring.Service qualified as Structuring (RequestCreateAssetForIjaraSukuk(..), CreateAssetForIjaraSukuk(..), RequestCreateIjaraSukuk(..), CreateIjaraSukuk(..), Service, createCouponPeriodicSchedule)
+import Daml.Finance.Interface.Instrument.Base.Instrument qualified as Instrument (GetView(..), I, Reference(..))
+import Daml.Finance.Instrument.Token.Instrument qualified as Token (Instrument(..))
+import Daml.Script
+
+originateToken : Party -> Party -> PartiesMap -> Time -> Text -> Text -> Script InstrumentKey
+originateToken depository issuer observers validAsOf id description = do
+  cid <- coerceContractId <$> submitMulti [depository, issuer] [] do
+    createCmd Token.Instrument with depository; issuer; id = Id id; version = "0"; observers; validAsOf; description; holdingStandard = TransferableFungible
+  createReference cid depository issuer observers
+
+originateIjaraSukuk : Party -> Party -> Party -> Party -> Text -> Text -> PartiesMap -> Time -> Decimal -> Date -> [Text] -> Party -> Date-> Date -> DayCountConventionEnum -> BusinessDayConventionEnum -> Decimal -> PeriodEnum -> Int -> InstrumentKey -> InstrumentKey -> Script (InstrumentKey)
+originateIjaraSukuk operator provider customer public id description observers lastEventTimestamp notional issueDate holidayCalendarIds calendarDataProvider firstRentalDate maturityDate dayCountConvention businessDayConvention rentalRate rentalPeriod rentalPeriodMultiplier currency asset = do
+  let
+    periodicSchedule = Structuring.createCouponPeriodicSchedule firstRentalDate holidayCalendarIds businessDayConvention rentalPeriod rentalPeriodMultiplier issueDate maturityDate 
+  createIjaraSukukRequestCid <- submit customer do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.RequestCreateIjaraSukuk with id; description; notional; rentalRate; issueDate; firstRentalDate; maturityDate; holidayCalendarIds; calendarDataProvider; dayCountConvention; businessDayConvention; rentalPeriod; rentalPeriodMultiplier; currency; observers; lastEventTimestamp; asset
+  createIjaraSukukCid <- submitMulti [provider] [public] do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.CreateIjaraSukuk with ..
+  createReference createIjaraSukukCid provider customer observers
+
+
+originateAssetForIjaraSukuk : Party -> Party -> Party -> Party -> Text -> Text -> PartiesMap -> Time -> Decimal -> Date -> [Text] -> Party -> Date -> Date -> DayCountConventionEnum -> BusinessDayConventionEnum -> Decimal -> PeriodEnum -> Int -> InstrumentKey -> Script (InstrumentKey)
+originateAssetForIjaraSukuk operator provider customer public id description observers lastEventTimestamp notional issueDate holidayCalendarIds calendarDataProvider firstRentalDate maturityDate dayCountConvention businessDayConvention rentalRate rentalPeriod rentalPeriodMultiplier currency = do
+  let
+    periodicSchedule = Structuring.createCouponPeriodicSchedule firstRentalDate holidayCalendarIds businessDayConvention rentalPeriod rentalPeriodMultiplier issueDate maturityDate
+  createAssetForIjaraSukukRequestCid <- submit customer do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.RequestCreateAssetForIjaraSukuk with id; description; notional; rentalRate; issueDate; firstRentalDate; maturityDate; holidayCalendarIds; calendarDataProvider; dayCountConvention; businessDayConvention; rentalPeriod; rentalPeriodMultiplier; currency; observers; lastEventTimestamp
+  createAssetForIjaraSukukCid <- submitMulti [provider] [public] do exerciseByKeyCmd @Structuring.Service (operator, provider, customer) Structuring.CreateAssetForIjaraSukuk with ..
+  createReference createAssetForIjaraSukukCid provider customer observers
+
+
+createReference : ContractId Instrument.I -> Party -> Party -> PartiesMap -> Script InstrumentKey
+createReference cid depository issuer observers = do
+  instrumentView <- submitMulti [depository, issuer] [] do exerciseCmd cid Instrument.GetView with viewer = issuer
+  let ref = Instrument.Reference with instrumentView; cid; observers
+  -- submitMulti [depository, issuer] [] do createCmd ref
+  pure $ key ref
+
+-- createInstrumentReference : ContractId Instrument.I -> Party -> Party -> PartiesMap -> Script InstrumentKey
+-- createInstrumentReference cid depository issuer observers = do
+--   instrumentView <- submit issuer do exerciseCmd cid Instrument.GetView with viewer=issuer
+--   reference <- submit depository do createCmd Instrument.Reference with instrumentView; cid; observers
+--   pure $ key reference

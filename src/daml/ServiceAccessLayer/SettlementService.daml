@@ -1,0 +1,39 @@
+module ServiceAccessLayer.SettlementService where
+
+import Daml.Finance.Interface.Settlement.Batch qualified as Batch (I)
+import Daml.Finance.Interface.Settlement.Instruction qualified as Instruction (I)
+import Daml.Finance.Interface.Types.Common.Types (AccountKey, InstrumentQuantity)
+import Daml.Finance.Interface.Settlement.Types qualified as Settlement (Allocation, Approval)
+import Daml.Finance.Interface.Holding.Holding as Holding (I)
+import Daml.Finance.Interface.Settlement.Types (Allocation(..), Approval(..))
+import Services.Settlement.Service as Settlement (SettleBatch(..), Service(..), AllocateInstruction(..), ApproveInstruction(..))
+import Services.Settlement.DvP as DvP (Proposal(..), Accept(..))
+import Daml.Script
+
+
+createAndAcceptDvP : Party -> Party -> Party -> Party -> InstrumentQuantity -> InstrumentQuantity -> Text -> Script(ContractId Batch.I, ContractId Instruction.I, ContractId Instruction.I)
+createAndAcceptDvP proposer counterParty operator settlementProvider receivingQuantity payingQuantity id = do
+  proposalCid <- submit proposer do createCmd DvP.Proposal with receivingQuantity; payingQuantity; proposer; counterParty; id
+  (batchCid, recInstructionCid, payInstructionCid) <- submit counterParty do exerciseCmd proposalCid DvP.Accept with operator; settlementProvider
+  pure(batchCid, recInstructionCid, payInstructionCid)
+
+allocateAndApprove : Party -> Party -> Party -> Party -> Party -> ContractId Instruction.I -> ContractId Instruction.I -> ContractId Holding.I -> AccountKey -> Script()
+allocateAndApprove operator proposer counterParty paySettlementProvider recSettlementProvider payInstructionCid recInstructionCid allocationHolding account = do
+  allocatedInstructionCid <- allocateInstruction operator paySettlementProvider proposer payInstructionCid (Pledge allocationHolding)
+  approvedInstructionCid <- approveInstruction operator recSettlementProvider counterParty allocatedInstructionCid (TakeDelivery account)
+  pure()
+
+allocateInstruction : Party -> Party -> Party -> ContractId Instruction.I -> Settlement.Allocation -> Script (ContractId Instruction.I)
+allocateInstruction operator settlementProvider allocator instructionCid allocation = do
+  allocatedInstructionCid <- submit allocator do exerciseByKeyCmd @Settlement.Service (operator, settlementProvider, allocator) Settlement.AllocateInstruction with actor=allocator; instructionCid; allocation
+  pure(allocatedInstructionCid)
+
+approveInstruction : Party -> Party -> Party -> ContractId Instruction.I -> Settlement.Approval -> Script (ContractId Instruction.I)
+approveInstruction operator settlementProvider approver instructionCid approval = do
+  approvedInstructionCid <- submit approver do exerciseByKeyCmd @Settlement.Service (operator, settlementProvider, approver) Settlement.ApproveInstruction with actor=approver; instructionCid; approval
+  pure(approvedInstructionCid)
+
+settleBatch : Party -> Party -> Party -> ContractId Batch.I -> Script (ContractId Holding.I, ContractId Holding.I)
+settleBatch operator settlementProvider actor batchCid = do
+  [proposerHoldingCid, counterPartyHoldingCid] <- submitMulti [actor, operator] [] do exerciseByKeyCmd @Settlement.Service (operator, settlementProvider, actor) Settlement.SettleBatch with actor; batchCid
+  pure (proposerHoldingCid, counterPartyHoldingCid)

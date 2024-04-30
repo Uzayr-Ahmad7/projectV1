@@ -1,0 +1,44 @@
+module Workflow.CreateRoles where
+
+import Daml.Script
+import Roles.Operator qualified as Operator (OfferInvestorCustodianRole(..), OfferRegistryRole(..), OfferBankRole(..), OfferCentralBankRole(..), OfferCustodianRole(..), Role(..))
+import Roles.Custodian qualified as Custodian (Accept(..), Role)
+import Roles.CentralBank qualified as CentralBank (Accept(..), Role)
+import Roles.Registry qualified as Registry (Accept(..), Role)
+import Roles.Bank qualified as Bank (Accept(..), Role)
+import Roles.InvestorCustodian qualified as InvestorCustodian (Accept(..), Role)
+
+
+createOperatorParty : Text -> Script (Party)
+createOperatorParty operatorName = do
+  let operator = allocatePartyWithHint operatorName $ PartyIdHint operatorName
+  operator
+
+createOperatorRole : Party -> Script (ContractId Operator.Role)
+createOperatorRole operator = do
+  submit operator do createCmd Operator.Role with operator
+
+createCustodianRole : Party -> Party -> Script (ContractId Custodian.Role)
+createCustodianRole operator custodian = do
+  offerCid <- submit operator do exerciseByKeyCmd @Operator.Role operator Operator.OfferCustodianRole with provider = custodian
+  submit custodian do exerciseCmd offerCid Custodian.Accept
+
+createCentralBankRole : Party -> Party -> Script (ContractId CentralBank.Role)
+createCentralBankRole operator centralBank = do
+  offerCid <- submit operator do exerciseByKeyCmd @Operator.Role operator Operator.OfferCentralBankRole with provider = centralBank
+  submit centralBank do exerciseCmd offerCid CentralBank.Accept
+
+createBankRole : Party -> Party -> Script (ContractId Bank.Role)
+createBankRole operator bank = do
+  offerCid <- submit operator do exerciseByKeyCmd @Operator.Role operator Operator.OfferBankRole with provider = bank
+  submit bank do exerciseCmd offerCid Bank.Accept
+
+createRegistryRole : Party -> Party -> Script (ContractId Registry.Role)
+createRegistryRole operator registry = do
+  offerCid <- submit operator do exerciseByKeyCmd @Operator.Role operator Operator.OfferRegistryRole with provider = registry
+  submit registry do exerciseCmd offerCid Registry.Accept
+
+createInvestorCustodianRole : Party -> Party -> Script (ContractId InvestorCustodian.Role)
+createInvestorCustodianRole operator investorCustodian = do
+  offerCid <- submit operator do exerciseByKeyCmd @Operator.Role operator Operator.OfferInvestorCustodianRole with provider = investorCustodian
+  submit investorCustodian do exerciseCmd offerCid InvestorCustodian.Accept
